@@ -38,9 +38,9 @@ class TwitterAPI:
             self.client = None
             logger.warning("Twitter API credentials not configured")
         
-        # Rate limiting
+        # Rate limiting - reduce frequency to avoid hitting limits
         self.last_request_time = 0
-        self.min_request_interval = 1.0  # seconds
+        self.min_request_interval = 2.0  # seconds between requests
     
     
     def _rate_limit(self):
@@ -58,26 +58,29 @@ class TwitterAPI:
     def get_recent_mentions(self, limit: int = 100) -> List[Dict]:
         """
         Get recent mentions from Twitter
-        
+
         Args:
             limit: Maximum number of tweets to fetch
-            
+
         Returns:
             List of tweet dictionaries
         """
         if not self.client:
-            logger.warning("Twitter client not configured")
+            logger.warning("Twitter client not configured - using mock data")
             return self._get_mock_data(limit)
-        
+
         try:
             self._rate_limit()
-            
+
             # Fetch recent tweets mentioning the brand
             query = os.getenv('TWITTER_SEARCH_QUERY', 'your_brand_name -is:retweet')
-            
+
+            # Limit max_results to 10 for free tier to avoid rate limits
+            max_results = min(limit, 10)
+
             tweets = self.client.search_recent_tweets(
                 query=query,
-                max_results=min(limit, 100),
+                max_results=max_results,
                 tweet_fields=['created_at', 'public_metrics', 'author_id'],
                 expansions=['author_id']
             )
@@ -108,28 +111,31 @@ class TwitterAPI:
     def fetch_tweets(self, keywords: List[str], count: int = 100) -> List[Dict]:
         """
         Fetch tweets based on keywords
-        
+
         Args:
             keywords: List of keywords to search
             count: Number of tweets to fetch
-            
+
         Returns:
             List of tweet dictionaries
         """
         if not self.client:
+            logger.warning("Twitter client not configured - using mock data")
             return self._get_mock_data(count)
-        
+
         try:
             self._rate_limit()
-            
+
             # Build query from keywords
             query = ' OR '.join(keywords) + ' -is:retweet lang:en'
-            
+
+            # Limit max_results to 10 for free tier to avoid rate limits
+            max_results = min(count, 10)
+
             tweets = self.client.search_recent_tweets(
                 query=query,
-                max_results=min(count, 100),
-                tweet_fields=['created_at', 'public_metrics', 'lang'],
-                start_time=datetime.utcnow() - timedelta(days=7)
+                max_results=max_results,
+                tweet_fields=['created_at', 'public_metrics', 'lang']
             )
             
             if not tweets.data:

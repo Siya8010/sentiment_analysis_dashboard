@@ -10,21 +10,25 @@ from flask_jwt_extended import JWTManager, create_access_token, jwt_required, ge
 from datetime import datetime, timedelta
 import os
 from functools import wraps
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Import custom modules
-from core.sentiment_analyzer import SentimentAnalyzer
-from core.predictive_model import PredictiveModel
-from core.data_processor import DataProcessor
-from core.twitter_integration import TwitterAPI
+from sentiment_analyzer import SentimentAnalyzer
+from predictive_model import PredictiveModel
+from data_processor import DataProcessor
+from twitter_integration import TwitterAPI
 # Select database backend
 DB_DRIVER = os.getenv('DB_DRIVER', 'sqlite').lower()
 if DB_DRIVER == 'sqlite':
-    from core.database_sqlite import Database
+    from database_sqlite import Database
 else:
-    from core.database import Database
+    from database import Database
 
-from core.gdpr_compliance import GDPRHandler
-from core.cache_manager import CacheManager
+from gdpr_compliance import GDPRHandler
+from cache_manager import CacheManager
 
 app = Flask(__name__)
 app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key-change-in-production')
@@ -175,6 +179,14 @@ def get_realtime_sentiment():
     source = request.args.get('source', 'all')
     limit = int(request.args.get('limit', 100))
     product = request.args.get('product') or request.args.get('keywords')
+
+    # Create cache key
+    cache_key = f"realtime:{source}:{product}:{limit}"
+    cached_result = cache.get(cache_key)
+
+    if cached_result:
+        return jsonify(cached_result), 200
+
     data = []
     try:
         if source in ['all', 'twitter']:
@@ -188,14 +200,24 @@ def get_realtime_sentiment():
                 twitter_data = twitter_api.get_recent_mentions(limit=limit)
             data.extend(twitter_data)
     except tweepy.TooManyRequests:
-        return jsonify({'error': 'Twitter rate limit exceeded. Please try again later.'}), 429
+        return jsonify({'error': 'Twitter rate limit exceeded. Please try again in 15 minutes.'}), 429
+    except Exception as e:
+        logger.error(f"Error fetching realtime data: {str(e)}")
+        return jsonify({'error': 'Failed to fetch live data. Using cached data if available.'}), 500
+
     processed_data = data_processor.process_realtime_data(data)
-    return jsonify({
+
+    result = {
         'timestamp': datetime.utcnow().isoformat(),
         'source': source,
         'count': len(processed_data),
         'data': processed_data
-    }), 200
+    }
+
+    # Cache for 2 minutes to reduce API calls
+    cache.set(cache_key, result, ttl=120)
+
+    return jsonify(result), 200
 
 
 # ============= HISTORICAL DATA ENDPOINTS =============

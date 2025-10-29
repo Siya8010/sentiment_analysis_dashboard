@@ -24,15 +24,15 @@ class DataProcessor:
     def process_realtime_data(self, raw_data: List[Dict]) -> List[Dict]:
         """
         Process real-time data from social media
-        
+
         Args:
             raw_data: Raw data from social media APIs
-            
+
         Returns:
             Processed and analyzed data
         """
         processed = []
-        
+
         from sentiment_analyzer import SentimentAnalyzer
         analyzer = SentimentAnalyzer()
         
