@@ -20,8 +20,9 @@ logger = logging.getLogger(__name__)
 class Database:
     def __init__(self):
         """Initialize SQLite database"""
-        self.db_path = "data/sentiment_analysis.db"
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        self.db_path = "sentiment_analysis.db"
+        # Create data directory if using data/ path in the future
+        # os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         
         logger.info("SQLite database initialized")
         self._create_tables()
@@ -326,3 +327,107 @@ class Database:
                 return True
         except:
             return False
+
+    def get_sentiment_trends(self, period: str = 'week') -> List[Dict]:
+        """Get sentiment trends for a period"""
+        days_map = {'day': 1, 'week': 7, 'month': 30}
+        days = days_map.get(period, 7)
+        start_date = datetime.now() - timedelta(days=days)
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT
+                    DATE(created_at) as date,
+                    sentiment,
+                    source,
+                    COUNT(*) as count,
+                    AVG(confidence) as avg_confidence
+                FROM sentiment_records
+                WHERE created_at >= ?
+                GROUP BY DATE(created_at), sentiment, source
+                ORDER BY date ASC
+            """, (start_date,))
+
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    def get_crm_export_data(self, days: int = 7) -> List[Dict]:
+        """Get data formatted for CRM export"""
+        return self.get_historical_sentiment(days=days)
+
+    def get_training_data(self, days: int = 30) -> List[Dict]:
+        """Get training data for model retraining"""
+        start_date = datetime.now() - timedelta(days=days)
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT text_hash, sentiment, confidence
+                FROM sentiment_records
+                WHERE created_at >= ?
+                ORDER BY created_at DESC
+            """, (start_date,))
+
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    def get_api_calls_count(self, days: int = 1) -> int:
+        """Get API calls count"""
+        start_date = datetime.now() - timedelta(days=days)
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT COUNT(*) FROM sentiment_records
+                WHERE created_at >= ?
+            """, (start_date,))
+            return cursor.fetchone()[0]
+
+    def get_active_users_count(self, days: int = 7) -> int:
+        """Get active users count"""
+        start_date = datetime.now() - timedelta(days=days)
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT COUNT(DISTINCT user_id) FROM audit_logs
+                WHERE created_at >= ? AND user_id IS NOT NULL
+            """, (start_date,))
+            return cursor.fetchone()[0]
+
+    def get_avg_response_time(self) -> float:
+        """Get average response time (mock implementation)"""
+        return 245.0
+
+    def get_all_users(self) -> List[Dict]:
+        """Get all users"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, email, name, role, created_at
+                FROM users
+                ORDER BY created_at DESC
+            """)
+
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    def log_model_retrain(self, user_id: int, result: Dict):
+        """Log model retraining event"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO model_training_history
+                    (model_type, accuracy, training_samples, trained_by)
+                    VALUES (?, ?, ?, ?)
+                """, (
+                    'sentiment_classifier',
+                    result.get('accuracy', 0.0),
+                    result.get('training_samples', 0),
+                    user_id
+                ))
+
+        except Exception as e:
+            logger.error(f"Error logging model retrain: {str(e)}")

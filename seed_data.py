@@ -5,14 +5,13 @@ Populates database with sample data for testing
 
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
-    from core.database_sqlite import Database
+    from database_sqlite import Database
 except ImportError:
-    from core.database import Database
+    from database import Database
 
-from core.sentiment_analyzer import SentimentAnalyzer
+from sentiment_analyzer import SentimentAnalyzer
 from datetime import datetime, timedelta
 import random
 import logging

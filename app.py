@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 import os
 from functools import wraps
 import logging
+import numpy as np
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -265,14 +266,98 @@ def predict_sentiment():
     days = int(request.args.get('days', 7))
     if days > 30:
         return jsonify({'error': 'Maximum 30 days prediction allowed'}), 400
+
     cache_key = f"prediction:{days}"
     cached_prediction = cache.get(cache_key)
     if cached_prediction:
         return jsonify(cached_prediction), 200
-    historical_data = db.get_historical_sentiment(days=30)
-    predictions = predictive_model.predict(historical_data, forecast_days=days)
-    cache.set(cache_key, predictions, ttl=3600)
-    return jsonify(predictions), 200
+
+    try:
+        # Try to get historical data
+        historical_data = db.get_historical_sentiment(days=45)
+
+        if not historical_data or len(historical_data) < 30:
+            logger.warning(f"Insufficient historical data: {len(historical_data) if historical_data else 0} days")
+            # Fallback to stored predictions from database
+            return get_stored_predictions(days)
+
+        # Generate predictions using ML model
+        predictions = predictive_model.predict(historical_data, forecast_days=days)
+
+        # Check if prediction failed
+        if 'error' in predictions:
+            logger.error(f"Prediction error: {predictions['error']}")
+            return get_stored_predictions(days)
+
+        cache.set(cache_key, predictions, ttl=3600)
+        return jsonify(predictions), 200
+
+    except Exception as e:
+        logger.error(f"Error generating predictions: {str(e)}")
+        return get_stored_predictions(days)
+
+
+def get_stored_predictions(days: int = 7):
+    """Fallback: Get predictions stored in database"""
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT
+                    prediction_date as date,
+                    positive_score,
+                    negative_score,
+                    neutral_score,
+                    confidence,
+                    model_version
+                FROM predictions
+                WHERE prediction_date >= DATE('now')
+                ORDER BY prediction_date ASC
+                LIMIT ?
+            """, (days,))
+
+            rows = cursor.fetchall()
+            predictions = []
+
+            for row in rows:
+                row_dict = dict(row)
+                predictions.append({
+                    'date': row_dict['date'],
+                    'positive_score': round(row_dict['positive_score'], 2),
+                    'negative_score': round(row_dict['negative_score'], 2),
+                    'neutral_score': round(row_dict['neutral_score'], 2),
+                    'confidence': round(row_dict['confidence'], 2),
+                    'dominant_sentiment': max(
+                        [('positive', row_dict['positive_score']),
+                         ('negative', row_dict['negative_score']),
+                         ('neutral', row_dict['neutral_score'])],
+                        key=lambda x: x[1]
+                    )[0]
+                })
+
+            if predictions:
+                import numpy as np
+                avg_positive = np.mean([p['positive_score'] for p in predictions])
+                trend = 'improving' if avg_positive > 65 else 'stable'
+
+                return jsonify({
+                    'predictions': predictions,
+                    'forecast_days': len(predictions),
+                    'trend': trend,
+                    'avg_confidence': round(np.mean([p['confidence'] for p in predictions]), 2),
+                    'model_info': {
+                        'primary': 'Stored',
+                        'fallback': 'Database',
+                        'source': 'pre-computed'
+                    },
+                    'generated_at': datetime.utcnow().isoformat()
+                }), 200
+            else:
+                return jsonify({'error': 'No predictions available', 'predictions': []}), 404
+
+    except Exception as e:
+        logger.error(f"Error fetching stored predictions: {str(e)}")
+        return jsonify({'error': 'Failed to fetch predictions', 'predictions': []}), 500
 
 
 @app.route('/api/predictions/alerts', methods=['GET'])
